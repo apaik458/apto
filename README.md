@@ -5,7 +5,7 @@ Bimanual manipulation platform
 * Waveshare servos (CF35-12 + ST3025)
 * 3D printed parts + aluminium servo frames
 
-<div style="display: flex; justify-content: center">
+<div align="center">
     <img src="Media/robot.jpg" width="60%">
 </div>
 
