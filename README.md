@@ -39,15 +39,19 @@ apto/
 │   │   └── ...
 │   └── README.md
 ├── Media/                         ## Images/GIFs
-│   ├──
-│   └── robot.jpg
+│   ├── robot.jpg
+│   └── robot_sim.png
 ├── LICENSE
 └── README.md
 ```
 
-<!-- ## Simulation
+## Simulation
 
-For simulation, refer to the [apto_sim](https://github.com/apaik458/apto_sim) repo -->
+Refer to the [apto_sim](https://github.com/apaik458/apto_sim) repo for the Maniskill simulation environment
+
+<div align="center">
+    <img src="Media/robot_sim.png" width="60%">
+</div>
 
 ## Acknowledgements
 
