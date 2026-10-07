@@ -1,16 +1,20 @@
 #!/usr/bin/env python
 import atexit
-from cfservo_sdk import *
-import cv2
+from scservo_sdk import *
+import cv2 as cv
 import numpy as np
-import pyrealsense2 as rs
 
+# Memory Table Addresses
+HLS_POSITION_LOOP_P     = 21
+HLS_POSITION_LOOP_D     = 22
+HLS_POSITION_LOOP_I     = 23
+HLS_PROTECTION_CURRENT  = 28
 
 # Data Byte Length
-LEN_PRESENT_POSITION = 2
-LEN_GOAL_POSITION    = 2
-LEN_PRESENT_SPEED    = 2
-LEN_GOAL_SPEED       = 2
+LEN_PRESENT_POSITION    = 2
+LEN_GOAL_POSITION       = 2
+LEN_PRESENT_SPEED       = 2
+LEN_GOAL_SPEED          = 2
 
 
 def cleanup_handler():
@@ -92,7 +96,7 @@ class AptoSDK:
         self.baudrate = baudrate
 
         self.port_handler = PortHandler(port)
-        self.packet_handler = cfs(self.port_handler)
+        self.packet_handler = hls(self.port_handler)
 
         self._pos_reader = AptoPosReader(
             self,
@@ -118,8 +122,8 @@ class AptoSDK:
         self.moving_acc    = 25    # 25 * 100 = 2500 steps/s^2
         self.moving_torque = 500   # 500 * 0.0065A = 3.25A
 
-        self.prev_pos = self.pos = self.curr_pos = np.zeros(7)
-        self.prev_vel = self.vel = self.curr_vel = np.zeros(7)
+        self.prev_pos = self.pos = self.curr_pos = np.zeros(15)
+        self.prev_vel = self.vel = self.curr_vel = np.zeros(15)
 
     def is_connected(self):
         return self.port_handler.is_open
@@ -147,13 +151,13 @@ class AptoSDK:
         self.set_torque_enabled(self.motor_ids, False)
 
         # Set the default parameters
-        self.sync_write(self.motor_ids, np.ones(len(self.motor_ids)) * self.kP, CFS_POSITION_LOOP_P, 1)       # Pgain stiffness
-        self.sync_write(self.motor_ids, np.ones(len(self.motor_ids)) * self.kI, CFS_POSITION_LOOP_I, 1)       # Igain
-        self.sync_write(self.motor_ids, np.ones(len(self.motor_ids)) * self.kD, CFS_POSITION_LOOP_D, 1)       # Dgain damping
-        self.sync_write(self.motor_ids, np.ones(len(self.motor_ids)) * self.curr_lim, CFS_PROTECTION_CURRENT, 2) # Protection current limit
+        self.sync_write(self.motor_ids, np.ones(len(self.motor_ids)) * self.kP, HLS_POSITION_LOOP_P, 1)          # Pgain stiffness
+        self.sync_write(self.motor_ids, np.ones(len(self.motor_ids)) * self.kI, HLS_POSITION_LOOP_I, 1)          # Igain
+        self.sync_write(self.motor_ids, np.ones(len(self.motor_ids)) * self.kD, HLS_POSITION_LOOP_D, 1)          # Dgain damping
+        self.sync_write(self.motor_ids, np.ones(len(self.motor_ids)) * self.curr_lim, HLS_PROTECTION_CURRENT, 2) # Protection current limit
         
         # Set operating mode
-        self.sync_write(self.motor_ids, np.zeros(len(self.motor_ids)), CFS_MODE, 1) # 0 = position control, 1 = velocity control
+        self.set_control_mode("position")
     
     def disconnect(self):
         """Disconnects from the Waveshare device"""
@@ -165,7 +169,7 @@ class AptoSDK:
             return
         
         # Stop camera streaming
-        self.camera.pipeline.stop()
+        self.camera.vc.release()
 
         # Ensure motors are disabled at the end.
         self.set_torque_enabled(self.motor_ids, False, retries=0)
@@ -181,7 +185,7 @@ class AptoSDK:
         """Sets whether torque is enabled for the motors"""
         remaining_ids = list(motor_ids)
         while remaining_ids:
-            remaining_ids = self.write_byte(remaining_ids, int(enabled), CFS_TORQUE_ENABLE)
+            remaining_ids = self.write_byte(remaining_ids, int(enabled), HLS_TORQUE_ENABLE)
             if remaining_ids:
                 print('Could not set torque %s for IDs: %s',
                     'enabled' if enabled else 'disabled',
@@ -190,6 +194,20 @@ class AptoSDK:
                 break
             time.sleep(retry_interval)
             retries -= 1
+
+    def set_control_mode(self, control_str):
+        """Sets the control mode of the motors"""
+        if control_str == "position":
+            control_mode = 0
+        elif control_str == "velocity":
+            control_mode = 1
+        
+        self.sync_write(
+            self.motor_ids,
+            np.zeros(len(self.motor_ids)) if control_mode==0 else np.ones(len(self.motor_ids)),
+            HLS_MODE,
+            1
+        ) # 0 = position control, 1 = velocity control
 
     def read_pos(self):
         """Returns the current positions"""
@@ -238,6 +256,13 @@ class AptoSDK:
         self.curr_pos = np.array(pose)
 
         self.write_desired_pos(self.motor_ids, self.curr_pos)
+
+    def set_delta_pose(self, pose):
+        """Set a goal delta pose for the joints (radians)"""
+        self.prev_pos = self.curr_pos
+        self.curr_pos = angle_safety_clip(self.curr_pos + np.array(pose))
+
+        self.write_desired_pos(self.motor_ids, self.curr_pos)
     
     def read_vel(self):
         """Returns the current velocities"""
@@ -250,7 +275,7 @@ class AptoSDK:
         velocities = vel_scale_stv(velocities)
         # handle negative velocities
         velocities = [int(-v)|0b1000000000000000 if v<0 else v for v in velocities]
-        self.sync_write(motor_ids, velocities, CFS_GOAL_SPEED_L, LEN_GOAL_SPEED)
+        self.sync_write(motor_ids, velocities, HLS_GOAL_SPEED_L, LEN_GOAL_SPEED)
 
     def set_vel(self, vel):
         """Set target velocities for the joints (rad/s)"""
@@ -396,7 +421,7 @@ class AptoPosReader(AptoReader):
         super().__init__(
             client,
             motor_ids,
-            address=CFS_PRESENT_POSITION_L,
+            address=HLS_PRESENT_POSITION_L,
             size=LEN_PRESENT_POSITION,
         )
 
@@ -406,7 +431,7 @@ class AptoPosReader(AptoReader):
 
     def _update_data(self, index, motor_id):
         """Updates the data index for the given motor ID"""
-        pos = self.operation.getData(motor_id, CFS_PRESENT_POSITION_L, LEN_PRESENT_POSITION)
+        pos = self.operation.getData(motor_id, HLS_PRESENT_POSITION_L, LEN_PRESENT_POSITION)
         pos = unsigned_to_signed(pos, size=4)
         self._pos_data[index] = pos_scale_vta(pos)
     
@@ -423,7 +448,7 @@ class AptoVelReader(AptoReader):
         super().__init__(
             client,
             motor_ids,
-            address=CFS_PRESENT_SPEED_L,
+            address=HLS_PRESENT_SPEED_L,
             size=LEN_PRESENT_SPEED,
         )
 
@@ -433,7 +458,7 @@ class AptoVelReader(AptoReader):
 
     def _update_data(self, index, motor_id):
         """Updates the data index for the given motor ID"""
-        vel = self.operation.getData(motor_id, CFS_PRESENT_SPEED_L, LEN_PRESENT_SPEED)
+        vel = self.operation.getData(motor_id, HLS_PRESENT_SPEED_L, LEN_PRESENT_SPEED)
         
         if vel&0b1000000000000000:
             vel &= 0b0111111111111111
@@ -451,44 +476,20 @@ class Camera:
     """
 
     def __init__(self):
-        # Configure depth and color streams
-        self.pipeline = rs.pipeline()
-        self.config = rs.config()
+        self.vc = cv.VideoCapture(0)
 
-        # Get device product line for setting a supporting resolution
-        self.pipeline_wrapper = rs.pipeline_wrapper(self.pipeline)
-        self.pipeline_profile = self.config.resolve(self.pipeline_wrapper)
-        self.device = self.pipeline_profile.get_device()
-        self.device_product_line = str(self.device.get_info(rs.camera_info.product_line))
+        if self.vc.isOpened(): # try to get the first frame
+            rval, frame = self.vc.read()
+        else:
+            rval = False
 
-        found_rgb = False
-        for s in self.device.sensors:
-            if s.get_info(rs.camera_info.name) == 'RGB Camera':
-                found_rgb = True
-                break
-        if not found_rgb:
-            print("The demo requires Depth camera with Color sensor")
+        if not rval:
+            print("Could not connect to camera")
             exit(0)
 
-        self.config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
-
-        # Start streaming
-        self.pipeline.start(self.config)
-    
     def get_frame(self):
-        while True:
-            # Wait for a coherent pair of frames: depth and color
-            frames = self.pipeline.wait_for_frames()
-            color_frame = frames.get_color_frame()
-            if not color_frame:
-                continue
-            break
-
-        # Convert images to numpy arrays
-        color_image = np.asanyarray(color_frame.get_data())
-        images = color_image
-
-        return images
+        rval, frame = self.vc.read()
+        return frame if rval else None
 
 # Register global cleanup function.
 atexit.register(cleanup_handler)

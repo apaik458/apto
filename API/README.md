@@ -3,10 +3,10 @@
 A Python API for controlling the robot platform
 ```
 API/
-├── cfscl/             ## CFServo SDK usage example
-├── cfservo_sdk/       ## CFServo SDK for Waveshare servos
+├── scservo_sdk/       ## SCServo SDK for FeeTech/Waveshare servos
 ├── apto_sdk.py        ## Robot platform API
 ├── main.py            ## Apto SDK usage
+├── README.md
 └── requirements.txt
 ```
 
@@ -31,3 +31,5 @@ Run example script to move robot to home pose
 ```bash
 python main.py
 ```
+
+Note: If getting `Permission denied: '/dev/ttyACM0'` error, change port permission with `sudo chmod a+rw /dev/ttyACM0` command
